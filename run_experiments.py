@@ -215,7 +215,7 @@ def main():
             t = time()
             print(p)
             result = np.array(
-                Parallel(35)(delayed(inference_experiment)(*p) for i in range(Nsamples))
+                Parallel(1)(delayed(inference_experiment)(*p) for i in range(Nsamples))
             )
             pickle.dump((p, result), open(f"results/{hash(p)}.dump", "wb"))
             ts.append(time() - t)
