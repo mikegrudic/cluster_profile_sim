@@ -2,11 +2,6 @@ import numpy as np
 from os import system
 from os.path import isfile
 
-mmax = 150
-mmin = 1
-imf_samples = np.load("/home/mgrudic/kroupa_m300_samples.npy")[: 10**8]
-imf_samples = imf_samples[(imf_samples < mmax)]
-
 
 def get_isochrone(
     time_yr,
@@ -71,6 +66,10 @@ def generate_random_luminosities(
         Lgrid = iso[:, 7]
     else:
         Lgrid = Lbol
+    mmax = 150
+    mmin = 1
+    imf_samples = np.load("/home/mgrudic/kroupa_m300_samples.npy")[: 10**8]
+    imf_samples = imf_samples[(imf_samples < mmax)]
     m = np.random.choice(imf_samples, 2 * N)
     m = m[m < mgrid.max()][:N]
     L = 10 ** np.interp(np.log10(m), np.log10(mgrid), np.log10(Lgrid))
