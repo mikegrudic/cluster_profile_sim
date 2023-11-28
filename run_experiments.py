@@ -13,18 +13,16 @@ from get_isochrone import *
 
 # global parameters that will apply to every model
 filt = "ACS_F555W"
+track = "mist_2016_vvcrit_40"
 age_yr = 1e8
 
-filt, track, grids = open(f"mass_lum_grid_{filt}_{track}.dump", "rb")
+filt, track, grids = pickle.load(open(f"mass_lum_grid_{filt}_{track}.dump", "rb"))
 mgrid, Lgrid = grids[age_yr]
-
-# mgrid = np.logspace(-1, np.log10(150), 1000)
-# logmgrid = np.log10(mgrid)
-# Lgrid = get_luminosity(mgrid, 1e8, filt)
-# logLgrid = np.log10(Lgrid)
-# mmax = mgrid[np.isfinite(logLgrid)].max()
+logmgrid = np.log10(mgrid)
+logLgrid = np.log10(Lgrid)
+mmax = mgrid[np.isfinite(logLgrid)].max()
 imf_samples = np.load("kroupa_m300_samples.npy")
-# imf_samples = imf_samples[imf_samples < mmax][: 10**7]
+imf_samples = imf_samples[imf_samples < mmax]
 
 
 def mass_to_lum(mass):
