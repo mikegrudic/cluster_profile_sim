@@ -12,17 +12,19 @@ from get_isochrone import *
 # os.environ["OMP_NUM_THREADS"] = "1"
 
 # global parameters that will apply to every model
-filter = "ACS_F555W"
+filt = "ACS_F555W"
 age_yr = 1e8
 
+filt, track, grids = open(f"mass_lum_grid_{filt}_{track}.dump", "rb")
+mgrid, Lgrid = grids[age_yr]
 
-mgrid = np.logspace(-1, np.log10(150), 1000)
-logmgrid = np.log10(mgrid)
-Lgrid = get_luminosity(mgrid, 1e8, filter)
-logLgrid = np.log10(Lgrid)
-mmax = mgrid[np.isfinite(logLgrid)].max()
-imf_samples = np.load("/home/mgrudic/kroupa_m300_samples.npy")
-imf_samples = imf_samples[imf_samples < mmax][: 10**7]
+# mgrid = np.logspace(-1, np.log10(150), 1000)
+# logmgrid = np.log10(mgrid)
+# Lgrid = get_luminosity(mgrid, 1e8, filt)
+# logLgrid = np.log10(Lgrid)
+# mmax = mgrid[np.isfinite(logLgrid)].max()
+imf_samples = np.load("kroupa_m300_samples.npy")
+# imf_samples = imf_samples[imf_samples < mmax][: 10**7]
 
 
 def mass_to_lum(mass):
@@ -54,7 +56,7 @@ def inference_experiment(
     N = len(radii)
     if count_photons:  # mock hubble photon counts
         masses = np.random.choice(imf_samples, N)
-        # generate_random_luminosities(N, age, filter=filt) # F555W luminosity
+        # generate_random_luminosities(N, age, filt=filt) # F555W luminosity
         L = mass_to_lum(masses)
         Q = L / 3.579e-12  # photons per second
         # photons expected from each star: Q * t * effective area / (4 pi r^2)
@@ -193,7 +195,7 @@ def generate_parameter_grid(num_params=10**2):
     # loguniform distribution of aperture sizes between 3 and 300 scale radii
     apertures = 10 ** (np.log10(3) + 2 * np.random.rand(num_params))
     # backgrounds: bound between 1/N and 1000/N
-    backgrounds = 10**(3*np.random.rand(num_params)) / Ncluster
+    backgrounds = 10 ** (3 * np.random.rand(num_params)) / Ncluster
     # resolution: fix at 0.1 scale radii
     res = np.repeat(0.1, num_params)
     # do a coin flip to decide whether we're counting photons or counting
@@ -219,6 +221,8 @@ def main():
             )
             pickle.dump((p, result), open(f"results/{hash(p)}.dump", "wb"))
             ts.append(time() - t)
+
+
 #        break
 
 if __name__ == "__main__":
