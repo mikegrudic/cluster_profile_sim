@@ -7,6 +7,7 @@ import os
 import pickle
 from joblib import Parallel, delayed
 from get_isochrone import *
+from matplotlib import pyplot as plt
 
 
 # os.environ["OMP_NUM_THREADS"] = "1"
@@ -30,8 +31,8 @@ def mass_to_lum(mass):
 
 
 def inference_experiment(
-    gamma=2.5,
-    background=1e-1,
+    shape=2.5,
+    background=1e-6,
     aperture=30,
     N=10**4,
     res=0.1,
@@ -39,18 +40,20 @@ def inference_experiment(
     dist_mpc=10,
     method="poisson",
     exposure_s=1000,
+    model="EFF",
 ):
     N = round(N)
     cluster_radii, background_radii = generate_radii(
-        gamma, background, aperture, N, 1.0
+        shape, background, aperture, N, model
     )
     if np.any(np.isnan(cluster_radii)):
         return [np.nan, np.nan]
     radii = np.concatenate([cluster_radii, background_radii])
-    # print(N, len(radii))
     if count_photons:
         res = max(res, 0.5 * 1.94e-7 * dist_mpc * 1e6)
-    rbins = np.linspace(0, aperture, int(aperture / res))
+    rbins = np.logspace(max(np.log10(res), -1), max(2, np.log10(aperture)), 1000)
+    rbins[0] = 0
+    # rbins = np.linspace(0, aperture, int(aperture / res))
     N = len(radii)
     if count_photons:  # mock hubble photon counts
         masses = np.random.choice(imf_samples, N)
@@ -88,16 +91,21 @@ def inference_experiment(
     else:
         lossfunc_touse = lossfunc_djorgovski87
 
-    p0 = (np.log10(mu0_est), np.log10(background * mu0_est), 0.0, gamma)
+    p0 = (np.log10(mu0_est), np.log10(background * mu0_est), 0.0, shape)
     fac = 1e-2
+    if model == "EFF":
+        shape_range = (0, 20)
+    elif model == "King62":
+        shape_range = (1e-3, 10 * aperture)
+
     for i in range(100):
         sol = minimize(
             lossfunc_touse,
             np.array(p0)
             + fac * np.random.rand(4),  # * (0 if i > 0 else np.array([1, 1, 0, 1])),
-            args=(rbins, N),
+            args=(rbins, N, model),
             method="Nelder-Mead",
-            bounds=[(-6, 6), (-10, 6), (-10, 1 + np.log10(aperture)), (0, 20)],
+            bounds=[(-6, 6), (-10, 6), (-10, 1 + np.log10(aperture)), shape_range],
             tol=1e-3,
         )
         fac *= 1.05
@@ -129,31 +137,68 @@ def logpoisson(counts, expected_counts):
     return counts * np.log(expected_counts) - expected_counts - logfact
 
 
-def generate_radii(gamma=2.5, background=1e-1, Rmax=100, N=100, a=1):
+def king62_cdf(x, c):
+    fac = 1 / (1 + c * c)
+    norm = -3 - fac + 4 * fac**0.5 + np.log(1 + c * c)
+    cdf = (
+        x**2 * fac - 4 * (np.sqrt(1 + x**2) - 1) * fac**0.5 + np.log(1 + x**2)
+    ) / norm
+    cdf[x > c] = 1
+    return cdf
+
+
+def king62_r50(rc, c):
+    rgrid = np.logspace(-3, np.log10(c), 10000) * rc
+    return np.interp(0.5, king62_cdf(rgrid / rc, c), rgrid)
+
+
+def king62_central_norm(c):
+    fac = (1 + c * c) ** -0.5
+    norm = (fac - 1) ** 2 / (np.pi * (np.log(1 + c**2) - 3 - fac * fac + 4 * fac))
+    return norm
+
+
+def generate_radii(shape=2.5, background=1e-1, Rmax=100, N=100, model="EFF"):
     np.random.seed()
-    norm = (gamma - 2) / (2 * np.pi)
+    if model == "EFF":
+        gamma = shape
+        norm = (gamma - 2) / (2 * np.pi)
+        r_cluster = np.sort(np.sqrt((1 - np.random.rand(N)) ** (-2 / (gamma - 2)) - 1))
+        r50_target = (2 ** (2 / (gamma - 2)) - 1) ** 0.5
+    elif model == "King62":
+        c = shape
+        x = np.linspace(0, c, 10000)
+        cdf = king62_cdf(x, c)
+        norm = king62_central_norm(c)
+        r_cluster = np.sort(np.interp(np.random.rand(N), cdf, x))
+        r50_target = king62_r50(1.0, c)  # np.interp(0.5, cdf, x)
+
+    r_cluster *= r50_target / np.interp(0.5, np.linspace(0, 1, N), r_cluster)
+    r_cluster = r_cluster[r_cluster < Rmax]
+
     sigma_background = norm * background
-    r_cluster = np.sort(np.sqrt((1 - np.random.rand(N)) ** (-2 / (gamma - 2)) - 1))
-    r50_desired = (2 ** (2 / (gamma - 2)) - 1) ** 0.5
-    r_cluster *= r50_desired / np.interp(0.5, np.linspace(0, 1, N), r_cluster)
-    r_cluster = np.sort(r_cluster[r_cluster < Rmax])
     N_background = round(sigma_background * np.pi * Rmax**2 * N)
     r_background = Rmax * np.sqrt(np.random.rand(N_background))
     return r_cluster, r_background
 
 
-def lossfunc(x, rbins, bincounts):
-    logmu0, logbackground, loga, gam = x
+def lossfunc(x, rbins, bincounts, model="EFF"):
+    logmu0, logbackground, loga, shape = x
     mu, bg, a = 10**logmu0, 10**logbackground, 10**loga
-    cumcounts_avg = (
-        2
-        * a**gam
-        * np.pi
-        * (a ** (2 - gam) - (a**2 + rbins**2) ** (1 - gam / 2))
-        * mu
-        / (gam - 2)
-        + np.pi * rbins**2 * bg
-    )
+    if model == "EFF":
+        gam = shape
+        cumcounts_avg = (
+            mu
+            * 2
+            * a**gam
+            * np.pi
+            * (a ** (2 - gam) - (a**2 + rbins**2) ** (1 - gam / 2))
+            / (gam - 2)
+            + np.pi * rbins**2 * bg
+        )
+    elif model == "King62":
+        c = shape
+        cumcounts_avg = mu * king62_cdf(rbins, c) + np.pi * rbins**2 * bg
     expected_counts = np.diff(cumcounts_avg)
     prob = logpoisson(bincounts, expected_counts).sum()
     return -prob
@@ -183,17 +228,20 @@ def lossfunc_djorgovski87(x, rbins, bincounts):
     return -prob
 
 
-def generate_parameter_grid(num_params=10**2):
+def generate_parameter_grid(num_params=10**2, model="EFF"):
     """Generates a list of parameters for the simulated cluster+background inference experiments"""
 
     # uniform between 10^3-10^6 stars in the cluster
     Ncluster = np.int_(10 ** (3 + 3 * np.random.rand(num_params)) + 0.5)
     # uniform  distribution of gammas between 2.1 and 4.1
-    gammas = 2.1 + 2 * np.random.rand(num_params)
+    if model == "EFF":
+        gammas = 2.1 + 2 * np.random.rand(num_params)
+    elif model == "King62":
+        gammas = 10 ** (2 * np.random.rand(num_params))
     # loguniform distribution of aperture sizes between 3 and 300 scale radii
-    apertures = 10 ** (np.log10(3) + 2 * np.random.rand(num_params))
+    apertures = 10 ** (np.log10(3) + np.log10(100 / 3) * np.random.rand(num_params))
     # backgrounds: bound between 1/N and 1000/N
-    backgrounds = 10 ** (3 * np.random.rand(num_params)) / Ncluster
+    backgrounds = 10 ** (3.5 * np.random.rand(num_params)) / Ncluster
     # resolution: fix at 0.1 scale radii
     res = np.repeat(0.1, num_params)
     # do a coin flip to decide whether we're counting photons or counting
@@ -205,19 +253,24 @@ def generate_parameter_grid(num_params=10**2):
 
 
 def main():
-    if not isdir("results"):
-        os.mkdir("./results")
+    model = "King62"
+    if not isdir(f"results_{model}"):
+        os.mkdir(f"./results_{model}")
     while True:
-        params = generate_parameter_grid(100)
-        Nsamples = 10**4
+        params = generate_parameter_grid(100, model)
+        Nsamples = 10**3
         ts = []
         for p in params:
             t = time()
             print(p)
             result = np.array(
-                Parallel(1)(delayed(inference_experiment)(*p) for i in range(Nsamples))
+                Parallel(18)(
+                    delayed(inference_experiment)(*p, model=model)
+                    for i in range(Nsamples)
+                )
             )
-            pickle.dump((p, result), open(f"results/{hash(p)}.dump", "wb"))
+            print(np.median(result, axis=0))
+            pickle.dump((p, result), open(f"results_{model}/{hash(p)}.dump", "wb"))
             ts.append(time() - t)
 
 
