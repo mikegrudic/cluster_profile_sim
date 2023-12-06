@@ -92,15 +92,15 @@ def fit_results(do_plot=False, model="King62"):
             (gammas[cut] - 2) / gammas[cut]
         )  # fraction of counts above the background
         #        print(np.median(f_background))
-        ap_over_Reff = apertures[cut] /gammas[cut]  # Reff_model
+        ap_over_Reff = apertures[cut] / gammas[cut]  # Reff_model
 
         m = (
             10 ** x[0]
             * N[cut] ** -0.5
-#            * (1 + (backgrounds[cut] / 10 ** x[1]) ** x[2])
-#            * (1 + (ap_over_Reff / 10 ** x[3]) ** x[4])
+            * (1 + (backgrounds[cut] / 10 ** x[1]) ** x[2])
+            * (1 + (ap_over_Reff / 10 ** x[3]) ** x[4])
             # * (1 + 10 ** x[5] * (gammas[cut] - 2) ** x[6])
-#            * (1 + 10 ** x[5] * (gammas[cut]) ** x[6])
+            #            * (1 + 10 ** x[5] * (gammas[cut]) ** x[6])
         )
 
         if np.any(stars[cut]):
@@ -118,7 +118,7 @@ def fit_results(do_plot=False, model="King62"):
     if do_plot == 1:
         cut = N > 0
         fig, ax = plt.subplots()
-        Neff = N #(std_model(sol.x) / 10 ** sol.x[0]) ** -2
+        Neff = N  # (std_model(sol.x) / 10 ** sol.x[0]) ** -2
         print(
             Neff[N.argmax()],
             N.max(),
@@ -187,7 +187,7 @@ if bootstrap:
     print(np.c_[np.median(results, axis=0), sigma])
     bootstrap = 0
 
-results = fit_results(do_plot=1)
+results = fit_results(do_plot=1, model="EFF")
 for i in 0, 1, 3, 5:
     results[i] = 10 ** results[i]
 print(results)
