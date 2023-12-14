@@ -9,6 +9,7 @@ from matplotlib import pyplot as plt
 from run_experiments import *
 
 bootstrap = int(argv[1])
+model = argv[2]
 
 
 def fit_results(do_plot=False, model="King62"):
@@ -75,11 +76,7 @@ def fit_results(do_plot=False, model="King62"):
         "std_vs_frac.npy",
         np.c_[gammas, ages, stds, N, backgrounds, bias, stars, apertures, frac_inf],
     )
-    print(np.c_[N, stds])
-    cut = (
-        np.isfinite(stds) * (stds < 0.1) * (ages == 1e8) * (frac_inf == 0)
-    )  # * (backgrounds==1e-6)
-    print(N.max(), gammas[N.argmax()])
+    cut = np.isfinite(stds) * (stds < 0.1) * (ages == 1e8)  # * (stars)
     if bootstrap:
         cut *= np.random.rand(len(stds)) > 0.5
 
@@ -94,16 +91,29 @@ def fit_results(do_plot=False, model="King62"):
         #        print(np.median(f_background))
         ap_over_Reff = apertures[cut] / gammas[cut]  # Reff_model
 
+        bg_threshold = 10 ** x[1] * np.ones(len(Reff_model))
+        if len(x) > 8:
+            if np.any(stars[cut]):
+                bg_threshold[stars[cut]] *= 10 ** x[8]
         m = (
             10 ** x[0]
             * N[cut] ** -0.5
-            * (1 + (backgrounds[cut] / 10 ** x[1]) ** x[2])
-            * (1 + (ap_over_Reff / 10 ** x[3]) ** x[4])
-            # * (1 + 10 ** x[5] * (gammas[cut] - 2) ** x[6])
-            #            * (1 + 10 ** x[5] * (gammas[cut]) ** x[6])
+            * (1 + (backgrounds[cut] / bg_threshold) ** x[2])
+            * (1 + (apertures[cut] / 10 ** x[3]) ** x[4])
+            * (1 + 10 ** x[5] * (gammas[cut] - 2) ** x[6])
+            # * (
+            #     1
+            #     + 10 ** x[5]
+            #     * np.square(
+            #         2 ** (2 / (gammas[cut] - 2))
+            #         / (2 ** (2 / (gammas[cut] - 2)) - 1)
+            #         * (gammas[cut] - 2) ** -2
+            #     )
+            # )
+            # x[6]
         )
 
-        if np.any(stars[cut]):
+        if len(x) > 7:
             m[stars[cut]] *= 10 ** x[7]
         return m
 
@@ -111,36 +121,49 @@ def fit_results(do_plot=False, model="King62"):
         m = std_model(x)
         return np.mean(np.log10(m / stds[cut]) ** 2) ** 0.5
 
-    sol = minimize(lossfunc, (0.0, 0, 0.5, 0, 0.5, 0, -1, 1), tol=1e-6)
+    if np.any(stars[cut]) and np.any(~stars[cut]):
+        # fit that accounts for both light profiles and star counts
+        sol = minimize(
+            lossfunc,
+            (0.0, 0, 0.5, 0, 0.5, 0, -1, 1, 0),
+            tol=1e-6,
+        )
+    else:
+        sol = minimize(
+            lossfunc,
+            (0.0, 0, 0.5, 0, 0.5, 0, -1),
+            tol=1e-6,
+        )
     # sol = minimize(lossfunc, (0.0, 0, 0.5, 0, 0.5, 0, -1, 1), tol=1e-6)
     print(sol.fun)
 
     if do_plot == 1:
         cut = N > 0
         fig, ax = plt.subplots()
-        Neff = N  # (std_model(sol.x) / 10 ** sol.x[0]) ** -2
-        print(
-            Neff[N.argmax()],
-            N.max(),
-            stars[N.argmax()],
-            std_model(sol.x)[N.argmax()],
-            (apertures / r50_0)[N.argmax()],
-            backgrounds[N.argmax()],
-        )
+        Neff = (std_model(sol.x) / 10 ** sol.x[0]) ** -2
+        # print(
+        #     Neff[N.argmax()],
+        #     N.max(),
+        #     stars[N.argmax()],
+        #     std_model(sol.x)[N.argmax()],
+        #     (apertures / r50_0)[N.argmax()],
+        #     backgrounds[N.argmax()],
+        # )
         Ngrid = np.logspace(-1, 6, 1000)
 
-        ax.set(xscale="log", yscale="log")
-        ax.plot(
-            Ngrid,
-            0.15 / np.sqrt(Ngrid),
-            ls="dashed",
-            color="black",
-            zorder=-100,
-            label=r"$0.15/\sqrt{N_{\rm eff}}$",
-        )
+        # ax.set(xscale="log", yscale="log")
+        # ax.plot(
+        #     stds[cut],
+        #     std_model(sol.x),
+        #     ls="dashed",
+        #     color="black",
+        #     zorder=-100,
+        #     label=r"$%3.2g/\sqrt{N_{\rm eff}}$" % (10 ** sol.x[0]),
+        # )
+        print(len(gammas), len(stars), len(stds), len(std_model(sol.x)))
         ax.scatter(
-            Neff[stars],
-            stds[stars],
+            gammas[stars],
+            std_model(sol.x)[stars] / stds[stars],
             s=6,
             label="Fit surface brightness",
             marker="o",
@@ -148,8 +171,8 @@ def fit_results(do_plot=False, model="King62"):
             lw=0.1,
         )
         ax.scatter(
-            Neff[~stars],
-            stds[~stars],
+            gammas[cut][~stars],
+            std_model(sol.x)[~stars] / stds[~stars],
             s=6,
             label="Fit number density",
             marker="s",
@@ -159,15 +182,16 @@ def fit_results(do_plot=False, model="King62"):
             color=(0, 0, 0, 0),
         )
         ax.set(
-            xscale="log",
+            # xscale="log",
             yscale="log",
-            xlim=[0.1, 10**6],
-            ylim=[10**-4, 1],
-            xlabel=r"$N_{\rm eff}$",
+            # xlim=[1e-4, 1],
+            # ylim=[1e-4, 1],
+            # ylim=[10**-4, 1],
+            # xlabel=r"$N_{\rm eff}$",
             ylabel=r"$\sigma\left(\hat{R}_{\rm eff}/R_{\rm eff,true}\right)\,\left(\rm dex\right)$",
         )
         ax.legend(frameon=True, edgecolor="black")
-        plt.savefig("Neff_vs_sigma.pdf", bbox_inches="tight")
+        plt.savefig("sigma_vs_sigmamodel.pdf", bbox_inches="tight")
 
     elif do_plot == 2:
         cut = N > 0
@@ -180,14 +204,16 @@ def fit_results(do_plot=False, model="King62"):
 
 
 if bootstrap:
-    results = np.array([fit_results() for i in range(bootstrap)])
-    for i in 0, 1, 3, 5:
-        results[:, i] = 10 ** results[:, i]
+    results = np.array([fit_results(model=model) for i in range(bootstrap)])
+    for i in 0, 1, 3, 5, 8:
+        if i < len(results):
+            results[:, i] = 10 ** results[:, i]
     sigma = np.diff(np.percentile(results, [16, 84], axis=0), axis=0)[0]
     print(np.c_[np.median(results, axis=0), sigma])
     bootstrap = 0
 
-results = fit_results(do_plot=1, model="EFF")
-for i in 0, 1, 3, 5:
-    results[i] = 10 ** results[i]
+results = fit_results(do_plot=1, model=model)
+for i in 0, 1, 3, 5, 8:
+    if i < len(results):
+        results[i] = 10 ** results[i]
 print(results)

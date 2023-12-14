@@ -8,7 +8,9 @@ import pickle
 from joblib import Parallel, delayed
 from get_isochrone import *
 from matplotlib import pyplot as plt
+from sys import argv
 
+model = argv[1]
 
 # os.environ["OMP_NUM_THREADS"] = "1"
 # global parameters that will apply to every model
@@ -167,8 +169,10 @@ def inference_experiment(
     ]
 
     fac = 1e-2
+    sol_best = p0
+    fun_best = lossfunc_touse(p0, rbins, bin_counts, model)
     for i in range(100):
-        guess = np.array(p0) + fac * np.random.normal(size=(4,))
+        guess = np.array(sol_best) + fac * np.random.normal(size=(4,))
 
         sol = minimize(
             lossfunc_touse,
@@ -181,27 +185,11 @@ def inference_experiment(
             },
         )
         fac *= 1.05
-        fun = sol.fun
+        if sol.fun < fun_best:
+            sol_best = sol.x
+            fun_best = sol.fun
         if sol.success:
             break
-    if i > 10:
-        print(f"{i+1} tries required to minimize likelihood function!")
-    # print(
-    #     p0,
-    #     lossfunc_touse(p0, rbins, bin_counts, model),
-    #     sol.x,
-    #     lossfunc_touse(sol.x, rbins, bin_counts, model),
-    #     mu0_est,
-    # )
-
-    # sol2 = minimize(
-    #     lossfunc_touse,
-    #     guess,
-    #     args=(rbins, bin_counts, model),
-    #     tol=1e-6,
-    # )
-    # if sol2.success and sol2.fun < fun:
-    #     sol = sol2
 
     sol.x[-1] = 10 ** sol.x[-1]
 
@@ -270,7 +258,7 @@ def king62_central_norm(c):
 
 
 def eff_central_norm(gamma):
-    """Returns the central surface density of a normalized EFF profile of of slope gamma with unit scale radius"""
+    """Returns the central surface density of a normalized EFF profile of with slope gamma and unit scale radius"""
     return (gamma - 2) / (2 * np.pi)
 
 
@@ -372,16 +360,16 @@ def generate_parameter_grid(num_params=10**2, model="EFF"):
     """Generates a list of parameters for the simulated cluster+background inference experiments"""
 
     # uniform between 10^3-10^6 stars in the cluster
-    Ncluster = np.int_(10 ** (3 + 3 * np.random.rand(num_params)) + 0.5)
+    Ncluster = np.int_(10 ** (2 + 4 * np.random.rand(num_params)))
     # uniform  distribution of gammas between 2.1 and 4.1
     if model == "EFF":
         gammas = 2.1 + 2 * np.random.rand(num_params)
     elif model == "King62":
         gammas = 10 ** (2 * np.random.rand(num_params))
     # loguniform distribution of aperture sizes between 3 and 300 scale radii
-    apertures = 10 ** (np.log10(3) + np.log10(300 / 3) * np.random.rand(num_params))
-    # backgrounds: bound between 1/N and 1000/N
-    backgrounds = 10 ** (3.5 * np.random.rand(num_params)) / Ncluster
+    apertures = 10 ** (np.log10(3) + np.log10(100 / 3) * np.random.rand(num_params))
+    # backgrounds: bound between 1e-5 and 1e-1
+    backgrounds = 10 ** (3 * np.random.rand(num_params)) / Ncluster
     # resolution: fix at 0.1 scale radii
     res = np.repeat(0.1, num_params)
     # do a coin flip to decide whether we're counting photons or counting
@@ -393,23 +381,22 @@ def generate_parameter_grid(num_params=10**2, model="EFF"):
 
 
 def main():
-    model = "King62"
+    #    model = "King62
     if not isdir(f"results_{model}"):
         os.mkdir(f"./results_{model}")
     while True:
         params = generate_parameter_grid(100, model)
-        Nsamples = 10**4
+        Nsamples = 10**3
         ts = []
         for p in params:
             t = time()
-            print(p)
             result = np.array(
-                Parallel(18)(
+                Parallel(10)(
                     delayed(inference_experiment)(*p, model=model)
                     for i in range(Nsamples)
                 )
             )
-            print(np.median(result, axis=0))
+            print(p, np.median(result, axis=0))
             pickle.dump((p, result), open(f"results_{model}/{hash(p)}.dump", "wb"))
             ts.append(time() - t)
 
