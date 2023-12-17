@@ -55,7 +55,7 @@ def EFF_cdf(x, gamma):
 
 
 def EFF_r50(gamma, scale_radius=1.0):
-    return np.sqrt(2 ** (2 / (gamma - 2)) - 1)
+    return np.sqrt(2 ** (2 / (gamma - 2)) - 1) * scale_radius
 
 
 def r50(shape, scale_radius=1.0, model="EFF"):

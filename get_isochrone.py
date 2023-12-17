@@ -1,18 +1,28 @@
 import numpy as np
 from os import system
 from os.path import isfile
+import subprocess
+from io import StringIO
+from numba import vectorize
 
-mmax = 150
-mmin = 1
-imf_samples = np.load("/home/mgrudic/kroupa_m300_samples.npy")[: 10**8]
-imf_samples = imf_samples[(imf_samples < mmax)]
+wfc3_filters = (
+    "WFC3_UVIS_F218W",
+    "WFC3_UVIS_F225W",
+    "WFC3_UVIS_F275W",
+    "WFC3_UVIS_F336W",
+    "WFC3_UVIS_F360W",
+    "WFC3_UVIS_F438W",
+    "WFC3_UVIS_F475W",
+    "WFC3_UVIS_F555W",
+    "WFC3_UVIS_F606W",
+    "WFC3_UVIS_F775W",
+    "WFC3_UVIS_F814W",
+)
 
 
 def get_isochrone(
     time_yr,
-    filters=[
-        "ACS_F555W",
-    ],
+    filters=("ACS_F555W",),
     track="mist_2016_vvcrit_40",
 ):
     """
@@ -40,7 +50,38 @@ def get_isochrone(
     return np.genfromtxt(path, skip_header=4, skip_footer=2)
 
 
-def get_luminosity(mass, age, filter, track="mist_2016_vvcrit_40"):
+def generate_isochrone_grid(
+    ages,
+    filters=wfc3_filters,
+    track="geneva_2013_vvcrit_00",
+    mmin=0.1,
+    mmax=120,
+    num_masses=100,
+):
+    """From a grid of ages in yr, generates a grid of stellar properties including
+    photometry in the specified filters using the specified evolution track
+    """
+    result = str(
+        subprocess.check_output(
+            f"$SLUG_DIR/tools/c/write_isochrone/write_isochrone {track} "
+            + " ".join(str(a) for a in ages)
+            + " ".join((" -f " + f for f in filters))
+            + f" -nm {num_masses} -m0 {mmin} -m1 {mmax}",
+            shell=True,
+        )
+    ).replace("\\n", "\n")
+
+    grids = np.array(
+        [np.loadtxt(StringIO(a.split("---")[0])) for a in result.split("--\n")[1::2]]
+    )
+    return grids
+
+
+# @vectorize
+# def get_photometry_of_stars(masses,ages,isochrone_grid):
+
+
+def get_luminosity(mass, age, filter, track="geneva_2013_vvcrit_00"):
     iso = get_isochrone(age, filters=[filter], track=track)
     mgrid = iso[:, 0]
     Lgrid = iso[:, 7]
@@ -56,7 +97,7 @@ def generate_random_luminosities(
     filter="ACS_F555W",
     return_masses=False,
     return_Lbol=False,
-    track="mist_2016_vvcrit_40",
+    track="geneva_2013_vvcrit_00",
 ):
     iso = get_isochrone(
         age,

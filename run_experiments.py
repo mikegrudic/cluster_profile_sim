@@ -23,7 +23,9 @@ def mass_to_lum(mass, logmgrid, logLgrid):
     return 10 ** np.interp(np.log10(mass), logmgrid, logLgrid)
 
 
-filt, track, grids = pickle.load(open(f"mass_lum_grid_{filt}_{track}.dump", "rb"))
+filt, track, grids = pickle.load(
+    open(f"lumgrids/mass_lum_grid_{filt}_{track}.dump", "rb")
+)
 mgrid, Lgrid = grids[age_yr]
 logmgrid = np.log10(mgrid)
 logLgrid = np.log10(Lgrid)
