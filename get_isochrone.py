@@ -79,8 +79,8 @@ def generate_isochrone_grid(
     )
 
     with open("isochrone_grid", "wb") as f:
-        pickle.dump((filters, ages, grids), f)
-    return ages, grids
+        pickle.dump((track, filters, ages, grids), f)
+    return grids
 
 
 @njit(fastmath=True, error_model="numpy")
@@ -120,7 +120,7 @@ def get_photometry_of_stars(masses, ages, agegrid, isochrone_grid, magnitudes=Tr
 
     if magnitudes:
         interpolator = lin_interpolant
-        result = 100 * np.ones((masses.shape[0], num_filters), dtype=np.float64)
+        result = np.inf * np.ones((masses.shape[0], num_filters), dtype=np.float64)
     else:
         interpolator = log_interpolant
         result = np.zeros((masses.shape[0], num_filters), dtype=np.float64)
@@ -130,6 +130,7 @@ def get_photometry_of_stars(masses, ages, agegrid, isochrone_grid, magnitudes=Tr
         age_idx1, age_idx2, wt_age1, wt_age2 = log_interp_indices_and_weights(
             agegrid, age
         )
+        # print(wt_age1, wt_age2)
         if np.isnan(wt_age1) or np.isnan(wt_age2):
             continue
         mgrid1 = isochrone_grid[age_idx1, :, 0]
@@ -138,6 +139,7 @@ def get_photometry_of_stars(masses, ages, agegrid, isochrone_grid, magnitudes=Tr
         interpolant2 = interpolator(mgrid2, mass, isochrone_grid[age_idx2, :, 7:])
 
         if magnitudes:
+            # print(ages[i], wt_age1, wt_age2, interpolant1, interpolant2)
             val = wt_age1 * interpolant1 + wt_age2 * interpolant2
         else:
             val = 10 ** (wt_age1 * interpolant1 + wt_age2 * interpolant2)

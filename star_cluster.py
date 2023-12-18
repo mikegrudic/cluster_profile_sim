@@ -1,24 +1,19 @@
 from os.path import isfile
+import pickle
 import numpy as np
 from density_models import *
-from get_isochrone import generate_isochrone_grid
-
-mmax = 100
-imf_samples = np.load("kroupa_m300_samples.npy")
-imf_samples = imf_samples[imf_samples < mmax]
+from get_isochrone import generate_isochrone_grid, get_photometry_of_stars
+from filterlists import messa_m51_filters, chandar_m83_filters
+from slugpy.cluster_slug import cluster_slug
 
 
-def mass_to_lum(mass, logmgrid, logLgrid):
-    return 10 ** np.interp(np.log10(mass), logmgrid, logLgrid)
+MMAX = 100
+IMF_SAMPLES = np.load("kroupa_m300_samples.npy")
+IMF_SAMPLES = IMF_SAMPLES[IMF_SAMPLES < MMAX]
 
 
-# filt, track, grids = pickle.load(
-#     open(f"lumgrids/mass_lum_grid_{filt}_{track}.dump", "rb")
-# )
-# mgrid, Lgrid = grids[age_yr]
-# logmgrid = np.log10(mgrid)
-# logLgrid = np.log10(Lgrid)
-# mmax = mgrid[np.isfinite(logLgrid)].max()
+# def mass_to_lum(mass, logmgrid, logLgrid):
+# return 10 ** np.interp(np.log10(mass), logmgrid, logLgrid)
 
 
 class StarCluster:
@@ -49,7 +44,7 @@ class StarCluster:
         self.seed = seed
         self.background = background
         self.cluster_radii = self.background_radii = self.num_background = None
-        self.masses = None
+        self.masses = self.initial_mass = None
         self.photometry = {}
 
     def get_cluster_radii(self, enforce_r50=False):
@@ -97,35 +92,77 @@ class StarCluster:
         """Returns the radii of both the cluster and background stars"""
         return self.get_cluster_radii(), self.get_background_radii()
 
-    def get_stellar_masses(self):
+    def initial_stellar_masses(self):
         """Samples masses of stars in the cluster"""
-        if self.masses is not None:
-            return self.masses
-        self.masses = np.random.choice(imf_samples, self.num_stars)
+        if self.masses is None:
+            self.masses = np.random.choice(IMF_SAMPLES, self.num_stars)
         return self.masses
 
     def get_photometry(
         self,
         ages,
-        filters=("WFC3_UVIS_F555W", "WFC3_UVIS_F438W"),
+        filters=messa_m51_filters,
         track="geneva_2013_vvcrit_00",
+        return_sum=False,
     ):
         """Compute photometry values for individual stars"""
 
         # get stellar masses
-        masses = self.get_stellar_masses()
+        masses = self.initial_stellar_masses()
+        if isinstance(ages, float):
+            ages = np.repeat(ages, len(masses))
+
+        agegrid = np.logspace(5, 10, 1001)
 
         # look for photometry grid and check it has the filters we need
-        if isfile("isochrone_grid"):
+        if not isfile("isochrone_grid"):
+            grids = generate_isochrone_grid(agegrid, filters, track=track)
+        else:
             with open("isochrone_grid", "rb") as f:
-                grid_filters, ages, grids = pickle.read(f)
-            if sum((not (f in grid_filters) for f in filters)):
+                grid_track, grid_filters, grid_ages, grids = pickle.load(f)
+            if (
+                (set(filters) != set(grid_filters))
+                or (np.any(grid_ages != agegrid))
+                or (track != grid_track)
+            ):
                 print("Generating isochrone grid for desired filters...")
-                ages = np.logspace(6, 10, 101)
-                result = generate_isochrone_grid(ages, filters)
+                grids = generate_isochrone_grid(agegrid, filters, track=track)
                 print("Done!")
 
-        return self.masses
+        phot = get_photometry_of_stars(
+            masses,
+            ages,
+            agegrid,
+            grids,
+            magnitudes=True,
+        )
+        # self.live_stars =
+        if return_sum:  # add up the magnitudes
+            return -2.5 * np.log10(np.sum(10 ** (-phot / 2.5), axis=0))
+        return phot
+
+    def measure_slug(
+        self,
+        ages,
+        measurement="Mass",
+        cs=None,
+        filters=messa_m51_filters,
+        track="geneva_2013_vvcrit_00",
+    ):
+        if cs is None:
+            cs = cluster_slug(use_nebular=False, photsystem="Vega", filters=filters)
+
+        phot = self.get_photometry(ages, filters, track, return_sum=True)
+
+        logx, pdf = cs.mpdf({"age": 1, "mass": 0}[measurement.lower()], phot)
+        logx_lower, logx_med, logx_upper = np.interp(
+            [0.16, 0.5, 0.84], pdf.cumsum() / pdf.sum(), logx
+        )
+        return logx_lower, logx_med, logx_upper
+
+    def measure_radius(self, count_photons=True):
+        if count_photons:
+            phot = self.get_photometry(ages, filters, track)
 
     def binned_density_profile(self, num_bins=300, res=0.1):
         """Returns the effective bin radii and values of the binned projected
