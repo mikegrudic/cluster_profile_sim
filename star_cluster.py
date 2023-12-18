@@ -1,11 +1,13 @@
+from os.path import isfile
 import numpy as np
 from density_models import *
+from get_isochrone import generate_isochrone_grid
 
-
+mmax = 100
 imf_samples = np.load("kroupa_m300_samples.npy")
+imf_samples = imf_samples[imf_samples < mmax]
 
 
-# imf_samples = imf_samples[imf_samples < mmax]
 def mass_to_lum(mass, logmgrid, logLgrid):
     return 10 ** np.interp(np.log10(mass), logmgrid, logLgrid)
 
@@ -32,8 +34,8 @@ class StarCluster:
         rmax=100,
         background=0,
         seed=None,
-        sample_masses=False,
-        filters=None,
+        # sample_masses=False,
+        # filters=None,
     ):
         """Initializes the basic properties of the star cluster and calls
         generate_radii to randomly sample the cluster radii"""
@@ -109,7 +111,19 @@ class StarCluster:
         track="geneva_2013_vvcrit_00",
     ):
         """Compute photometry values for individual stars"""
+
+        # get stellar masses
         masses = self.get_stellar_masses()
+
+        # look for photometry grid and check it has the filters we need
+        if isfile("isochrone_grid"):
+            with open("isochrone_grid", "rb") as f:
+                grid_filters, ages, grids = pickle.read(f)
+            if sum((not (f in grid_filters) for f in filters)):
+                print("Generating isochrone grid for desired filters...")
+                ages = np.logspace(6, 10, 101)
+                result = generate_isochrone_grid(ages, filters)
+                print("Done!")
 
         return self.masses
 

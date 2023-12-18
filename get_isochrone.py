@@ -3,7 +3,8 @@ from os import system
 from os.path import isfile
 import subprocess
 from io import StringIO
-from numba import vectorize
+from numba import njit, prange
+import pickle
 
 wfc3_filters = (
     "WFC3_UVIS_F218W",
@@ -60,6 +61,8 @@ def generate_isochrone_grid(
 ):
     """From a grid of ages in yr, generates a grid of stellar properties including
     photometry in the specified filters using the specified evolution track
+
+    Shape: (# of ages, # of masses, # of bands + 7)
     """
     result = str(
         subprocess.check_output(
@@ -74,11 +77,76 @@ def generate_isochrone_grid(
     grids = np.array(
         [np.loadtxt(StringIO(a.split("---")[0])) for a in result.split("--\n")[1::2]]
     )
-    return grids
+
+    with open("isochrone_grid", "wb") as f:
+        pickle.dump((filters, ages, grids), f)
+    return ages, grids
 
 
-# @vectorize
-# def get_photometry_of_stars(masses,ages,isochrone_grid):
+@njit(fastmath=True, error_model="numpy")
+def log_interp_indices_and_weights(xgrid, x):
+    logx = np.log10(x)
+    logx_max, logx_min = np.log10(xgrid[-1]), np.log10(xgrid[0])
+    if (logx < logx_min) or (logx > logx_max):
+        return -1, -1, np.nan, np.nan
+    dlogx = (logx_max - logx_min) / (xgrid.shape[0] - 1)
+
+    idx1 = max(int((logx - logx_min) / dlogx), 0)
+    idx2 = min(idx1 + 1, xgrid.shape[0] - 1)
+    wt2 = (logx - np.log10(xgrid[idx1])) / dlogx
+    wt1 = 1 - wt2
+    return idx1, idx2, wt1, wt2
+
+
+@njit(fastmath=True, error_model="numpy")
+def log_interpolant(xgrid, x, y):
+    idx1, idx2, wt1, wt2 = log_interp_indices_and_weights(xgrid, x)
+    if np.isnan(wt1) or np.isnan(wt2):
+        return np.nan * y[idx1]
+    return wt1 * np.log10(y[idx1]) + wt2 * np.log10(y[idx2])
+
+
+@njit(fastmath=True, error_model="numpy")
+def lin_interpolant(xgrid, x, y):
+    idx1, idx2, wt1, wt2 = log_interp_indices_and_weights(xgrid, x)
+    if np.isnan(wt1) or np.isnan(wt2):
+        return np.nan * y[idx1]
+    return wt1 * y[idx1] + wt2 * y[idx2]
+
+
+@njit(parallel=True)
+def get_photometry_of_stars(masses, ages, agegrid, isochrone_grid, magnitudes=True):
+    num_filters = isochrone_grid.shape[2] - 7
+
+    if magnitudes:
+        interpolator = lin_interpolant
+        result = 100 * np.ones((masses.shape[0], num_filters), dtype=np.float64)
+    else:
+        interpolator = log_interpolant
+        result = np.zeros((masses.shape[0], num_filters), dtype=np.float64)
+
+    for i in prange(masses.shape[0]):
+        mass, age = masses[i], ages[i]
+        age_idx1, age_idx2, wt_age1, wt_age2 = log_interp_indices_and_weights(
+            agegrid, age
+        )
+        if np.isnan(wt_age1) or np.isnan(wt_age2):
+            continue
+        mgrid1 = isochrone_grid[age_idx1, :, 0]
+        mgrid2 = isochrone_grid[age_idx2, :, 0]
+        interpolant1 = interpolator(mgrid1, mass, isochrone_grid[age_idx1, :, 7:])
+        interpolant2 = interpolator(mgrid2, mass, isochrone_grid[age_idx2, :, 7:])
+
+        if magnitudes:
+            val = wt_age1 * interpolant1 + wt_age2 * interpolant2
+        else:
+            val = 10 ** (wt_age1 * interpolant1 + wt_age2 * interpolant2)
+
+        for j in range(num_filters):
+            if np.isfinite(val[j]):
+                result[i, j] = val[j]
+
+    return result
 
 
 def get_luminosity(mass, age, filter, track="geneva_2013_vvcrit_00"):
