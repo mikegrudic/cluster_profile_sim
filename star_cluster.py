@@ -160,9 +160,9 @@ class StarCluster:
         )
         return logx_lower, logx_med, logx_upper
 
-    def measure_radius(self, count_photons=True):
-        if count_photons:
-            phot = self.get_photometry(ages, filters, track)
+    # def measure_radius(self,count_photons=False,ages,filters,track):
+    #     if count_photons:
+    #         phot = self.get_photometry(ages, filters, track)
 
     def binned_density_profile(self, num_bins=300, res=0.1):
         """Returns the effective bin radii and values of the binned projected
