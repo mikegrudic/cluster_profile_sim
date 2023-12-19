@@ -54,11 +54,18 @@ def EFF_cdf(x, gamma):
     return np.sqrt((1 - x) ** (-2 / (gamma - 2)) - 1)
 
 
+def model_cdf(x, shape, model):
+    if model == "EFF":
+        return EFF_cdf(x, shape)
+    elif model == "King62":
+        return king62_cdf(x, shape)
+
+
 def EFF_r50(gamma, scale_radius=1.0):
     return np.sqrt(2 ** (2 / (gamma - 2)) - 1) * scale_radius
 
 
-def r50(shape, scale_radius=1.0, model="EFF"):
+def model_r50(shape, scale_radius=1.0, model="EFF"):
     if model == "EFF":
         return EFF_r50(shape, scale_radius)
     elif model == "King62":

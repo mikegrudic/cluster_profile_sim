@@ -1,19 +1,19 @@
+"""Defines StarCluster class"""
 from os.path import isfile
 import pickle
 import numpy as np
+from scipy.optimize import minimize
+from matplotlib import pyplot as plt
 from density_models import *
 from get_isochrone import generate_isochrone_grid, get_photometry_of_stars
-from filterlists import messa_m51_filters, chandar_m83_filters
+from filterlists import messa_m51_filters
 from slugpy.cluster_slug import cluster_slug
+from lossfuncs import *
 
 
 MMAX = 100
-IMF_SAMPLES = np.load("kroupa_m300_samples.npy")
+IMF_SAMPLES = np.load("kroupa_samples.npy")
 IMF_SAMPLES = IMF_SAMPLES[IMF_SAMPLES < MMAX]
-
-
-# def mass_to_lum(mass, logmgrid, logLgrid):
-# return 10 ** np.interp(np.log10(mass), logmgrid, logLgrid)
 
 
 class StarCluster:
@@ -36,7 +36,7 @@ class StarCluster:
         generate_radii to randomly sample the cluster radii"""
         self.num_stars = num_stars
         self.scale_radius = scale_radius
-        self.r50_target = r50(shape, scale_radius)
+        self.r50_target = model_r50(shape, scale_radius)
         self.norm = central_norm(shape, scale_radius, model)
         self.density_model = model
         self.shape = shape
@@ -67,7 +67,7 @@ class StarCluster:
             )
 
         if enforce_r50:
-            r50_target = r50(self.shape, self.scale_radius, self.density_model)
+            r50_target = model_r50(self.shape, self.scale_radius, self.density_model)
             self.cluster_radii *= r50_target / 10 ** np.interp(
                 0.5, np.linspace(0, 1, self.num_stars), np.log10(self.cluster_radii)
             )
@@ -141,7 +141,7 @@ class StarCluster:
             return -2.5 * np.log10(np.sum(10 ** (-phot / 2.5), axis=0))
         return phot
 
-    def measure_slug(
+    def measure_bayesian(
         self,
         ages,
         measurement="Mass",
@@ -154,15 +154,168 @@ class StarCluster:
 
         phot = self.get_photometry(ages, filters, track, return_sum=True)
 
-        logx, pdf = cs.mpdf({"age": 1, "mass": 0}[measurement.lower()], phot)
+        logx, pdf = cs.mpdf({"age": 1, "mass": 0, "av": 2}[measurement.lower()], phot)
         logx_lower, logx_med, logx_upper = np.interp(
             [0.16, 0.5, 0.84], pdf.cumsum() / pdf.sum(), logx
         )
         return logx_lower, logx_med, logx_upper
 
-    # def measure_radius(self,count_photons=False,ages,filters,track):
-    #     if count_photons:
-    #         phot = self.get_photometry(ages, filters, track)
+    def fit_density_profile(
+        self,
+        count_photons=False,
+        aperture=None,
+        num_bins=100,
+        method="poisson",
+        res=1e-1,
+        full_output=False,
+    ):  # ,ages,filters,track,resolution_pc=1.):
+        N = self.num_stars
+        if aperture is None:
+            aperture = self.rmax
+        cluster_radii = self.get_cluster_radii()
+        # background_radii = self.get_background_radii()
+        if np.any(np.isnan(cluster_radii)):
+            return [np.nan, np.nan]
+        all_radii = np.concatenate(self.get_all_radii())
+        # if count_photons:
+        #     res = max(res, 0.5 * 1.94e-7 * dist_mpc * 1e6)
+        rbins = np.logspace(
+            max(np.log10(res), -1), np.log10(aperture), min(N // 2, num_bins)
+        )
+        rbins[0] = 0
+        if count_photons:  # mock hubble photon counts
+            masses_cluster = np.random.choice(imf_samples, len(cluster_radii))
+            L = mass_to_lum(masses_cluster, logmgrid, logLgrid)
+            # masses_bg = np.random.choice(imf_samples_field, len(background_radii))
+            # L_bg = mass_to_lum(masses_bg, logmgrid_field, logLgrid_field)
+            # L = np.concatenate([L_cluster, L_bg])
+            Q = L / 3.579e-12  # photons per second
+            # photons expected from each star: Q * t * effective area / (4 pi r^2)
+            photons_expected = 3.78e-48 * (dist_mpc / 10) ** -2 * Q * exposure_s
+            if method == "djorgovski87":
+                radii_split = np.array_split(radii, 8)  # split into 8 sectors
+                photons_expected_split = np.array_split(photons_expected, 8)
+                photons_perbin_expected = np.array(
+                    [
+                        np.histogram(r, rbins, weights=p)[0]
+                        for r, p in zip(radii_split, photons_expected_split)
+                    ]
+                )
+
+                photons_perbin_expected += (
+                    background
+                    * central_norm(shape, model)
+                    * N
+                    * cluster_avg_lighttomass
+                    * m_avg_cluster
+                    * np.diff(np.pi * rbins**2)
+                    / 3.579e-12
+                    * 3.78e-48
+                    * (dist_mpc / 10) ** -2
+                    * exposure_s
+                    / 8
+                )
+                bin_counts = [
+                    np.random.poisson(P, size=P.shape) for P in photons_perbin_expected
+                ]
+
+                mu0_est = max(
+                    photons_perbin_expected.sum(0)[rbins[1:] < 0.5].sum()
+                    / (np.pi * 0.5**2),
+                    1,
+                )
+            else:
+                photons_perbin_expected = np.histogram(
+                    cluster_radii, rbins, weights=photons_expected
+                )[0]
+                # add smooth background, emulating an older stellar pop
+                photons_perbin_expected += (
+                    background
+                    * central_norm(shape, model)
+                    * N
+                    * cluster_avg_lighttomass
+                    * m_avg_cluster
+                    * np.diff(np.pi * rbins**2)
+                    / 3.579e-12
+                    * 3.78e-48
+                    * (dist_mpc / 10) ** -2
+                    * exposure_s
+                )
+
+                bin_counts = np.random.poisson(
+                    photons_perbin_expected, size=photons_perbin_expected.shape
+                )
+                mu0_est = max(
+                    photons_perbin_expected[rbins[1:] < 0.5].sum() / (np.pi * 0.5**2),
+                    1,
+                )
+        else:
+            if method == "djorgovski87":
+                radii_split = np.array_split(all_radii, 8)
+                bin_counts = [np.histogram(r, rbins)[0] for r in radii_split]
+            else:
+                bin_counts = np.histogram(all_radii, rbins)[0]
+            mu0_est = min(10, N) / (np.pi * all_radii[min(9, N - 1)] ** 2)
+
+        if method == "poisson":
+            lossfunc_touse = lossfunc
+        else:
+            lossfunc_touse = lossfunc_djorgovski87
+
+        p0 = np.array(
+            [
+                max(-10, np.log10(mu0_est)),
+                max(-10, np.log10(self.background * mu0_est)),
+                np.log10(self.scale_radius),
+                np.log10(self.shape),
+            ]
+        )
+
+        if self.density_model == "EFF":
+            shape_range = np.log10([2, 20])
+        elif self.density_model == "King62":
+            shape_range = np.log10([1e-3, 10 * aperture])
+        bounds = [
+            (np.log10(N) - 6, np.log10(N) + 6),
+            (-10, 10),
+            (-10, 1 + np.log10(aperture)),
+            shape_range,
+        ]
+
+        fac = 1e-2
+        sol_best = p0
+        fun_best = lossfunc_touse(p0, rbins, bin_counts, self.density_model)
+        for i in range(100):
+            guess = np.array(sol_best) + fac * np.random.normal(size=(4,))
+
+            sol = minimize(
+                lossfunc_touse,
+                guess,
+                args=(rbins, bin_counts, self.density_model),
+                method="Nelder-Mead",
+                bounds=bounds,
+                options={
+                    "xatol": 1e-6,
+                },
+            )
+            fac *= 1.05
+            if sol.fun < fun_best:
+                sol_best = sol.x
+                fun_best = sol.fun
+            if sol.success:
+                break
+
+        sol.x[-1] = 10 ** sol.x[-1]
+
+        if sol.success:
+            return sol.x  # if full_output else sol.x[2:]
+        return 4 * [np.nan]  # if full_output else 2 * [np.nan]
+
+    def measure_r50(self):
+        params = self.fit_density_profile()
+        scale_radius = 10 ** params[2]
+        shape = params[3]
+        return model_r50(shape, scale_radius, self.density_model)
 
     def binned_density_profile(self, num_bins=300, res=0.1):
         """Returns the effective bin radii and values of the binned projected
@@ -179,3 +332,10 @@ class StarCluster:
         r_eff = np.sqrt(rbins[1:] * rbins[:-1])
         number_density = counts / np.diff(np.pi * rbins**2)
         return r_eff, number_density
+
+    def plot_density_profile(self, num_bins=300, res=0.1):
+        r, sigma = sc.binned_density_profile(num_bins, res)
+        # params = self.fit_density_profile()
+
+        plt.loglog(r, sigma)
+        plt.show()

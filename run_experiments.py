@@ -1,4 +1,3 @@
-import numpy as np
 from scipy.optimize import minimize, newton
 from os.path import isdir
 from numba import vectorize
@@ -7,8 +6,10 @@ import os
 import pickle
 from joblib import Parallel, delayed
 from get_isochrone import *
+import numpy as np
 from matplotlib import pyplot as plt
 from sys import argv
+from lossfuncs import *
 
 model = argv[1]
 
@@ -201,35 +202,6 @@ def inference_experiment(
         return 4 * [np.nan] if full_output else 2 * [np.nan]
 
 
-@vectorize(fastmath=True)
-def logpoisson(counts, expected_counts):
-    """Fast computation of log of poisson PMF, using Ramanujan's Stirling-type approximation to factorial"""
-    # print(counts, expected_counts)
-    counts = int(counts + 0.5)
-    if expected_counts == 0:
-        if counts == 0:
-            return 0
-        else:
-            return -np.inf
-    if counts == 0:
-        logfact = 0
-    elif counts < 10:
-        fact = counts
-        for i in range(2, counts):  # factorial
-            fact *= i
-        logfact = np.log(fact)
-    else:  # stirling-type approximation due to Ramanujan
-        # cast counts to avoid integer overflow inside 3rd order term
-        counts = float(counts)
-        logfact = (
-            np.log(counts) * counts
-            - counts
-            + np.log(counts * (1 + 4 * counts * (1 + 2 * counts))) / 6
-            + np.log(np.pi) * 0.5
-        )
-    return counts * np.log(expected_counts) - expected_counts - logfact
-
-
 @vectorize
 def king62_cdf(x, c):
     if x >= c:
@@ -300,62 +272,6 @@ def generate_radii(
         N_background = round(sigma_background * np.pi * Rmax**2 * N)
     r_background = Rmax * np.sqrt(np.random.rand(N_background))
     return r_cluster, r_background
-
-
-def lossfunc(x, rbins, bincounts, model="EFF"):
-    if np.any(np.isnan(x)):
-        return np.inf
-    logmu0, logbackground, loga, logshape = x
-    mu, bg, a = 10**logmu0, 10**logbackground, 10**loga
-    if model == "EFF":
-        gam = 10**logshape
-        cumcounts_avg = (
-            mu
-            * 2
-            * a**gam
-            * np.pi
-            * (a ** (2 - gam) - (a**2 + rbins**2) ** (1 - gam / 2))
-            / (gam - 2)
-            + np.pi * rbins**2 * bg
-        )
-    elif model == "King62":
-        c = 10**logshape
-        cumcounts_avg = mu * king62_cdf(rbins / a, c) + np.pi * rbins**2 * bg
-    expected_counts = np.diff(cumcounts_avg)
-
-    prob = logpoisson(bincounts, expected_counts).sum()
-    return -prob
-
-
-def lossfunc_djorgovski87(x, rbins, bincounts, model="EFF"):
-    """
-    Surface brightness profile fitting loss function using the method of Djorgovski 1987
-    for estimating error-bars in radial surface brightness/number density bins:
-    divide into 8 sectors and compute standard deviation within each annulus (effectively bootstrapping)
-    """
-    if np.any(np.isnan(x)):
-        return np.inf
-    logmu0, logbackground, loga, logshape = x
-    mu, bg, a = 10**logmu0, 10**logbackground, 10**loga
-    if model == "EFF":
-        gam = 10**logshape
-        cumcounts_avg = (
-            mu
-            * 2
-            * a**gam
-            * np.pi
-            * (a ** (2 - gam) - (a**2 + rbins**2) ** (1 - gam / 2))
-            / (gam - 2)
-            + np.pi * rbins**2 * bg
-        )
-    elif model == "King62":
-        c = 10**logshape
-        cumcounts_avg = mu * king62_cdf(rbins / a, c) + np.pi * rbins**2 * bg
-    expected_counts = np.diff(cumcounts_avg)
-    stderr = np.std(bincounts, axis=0)
-    N = np.sum(bincounts, axis=0)
-    prob = np.sum(-((expected_counts - N) ** 2) / (2 * stderr**2))
-    return -prob
 
 
 def generate_parameter_grid(num_params=10**2, model="EFF"):
