@@ -69,21 +69,21 @@ def lossfunc_djorgovski87(x, rbins, bincounts, model="EFF"):
         return np.inf
     logmu0, logbackground, loga, logshape = x
     mu, bg, a, shape = 10**logmu0, 10**logbackground, 10**loga, 10**logshape
-    cumcounts_avg = mu * model_cdf(rbins / a, shape, model) + np.pi * rbins**2 * bg
-    # if model == "EFF":
-    #     gam = 10**logshape
-    #     cumcounts_avg = (
-    #         mu
-    #         * 2
-    #         * a**gam
-    #         * np.pi
-    #         * (a ** (2 - gam) - (a**2 + rbins**2) ** (1 - gam / 2))
-    #         / (gam - 2)
-    #         + np.pi * rbins**2 * bg
-    #     )
-    # elif model == "King62":
-    #     c = 10**logshape
-    #     cumcounts_avg = mu * king62_cdf(rbins / a, c) + np.pi * rbins**2 * bg
+    # cumcounts_avg = mu * model_cdf(rbins / a, shape, model) + np.pi * rbins**2 * bg
+    if model == "EFF":
+        gam = 10**logshape
+        cumcounts_avg = (
+            mu
+            * 2
+            * a**gam
+            * np.pi
+            * (a ** (2 - gam) - (a**2 + rbins**2) ** (1 - gam / 2))
+            / (gam - 2)
+            + np.pi * rbins**2 * bg
+        )
+    elif model == "King62":
+        c = 10**logshape
+        cumcounts_avg = mu * king62_cdf(rbins / a, c) + np.pi * rbins**2 * bg
     expected_counts = np.diff(cumcounts_avg)
     stderr = np.std(bincounts, axis=0)
     total_counts = np.sum(bincounts, axis=0)

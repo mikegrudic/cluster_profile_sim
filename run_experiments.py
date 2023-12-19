@@ -116,18 +116,18 @@ def inference_experiment(
                 cluster_radii, rbins, weights=photons_expected
             )[0]
             # add smooth background, emulating an older stellar pop
-            photons_perbin_expected += (
-                background
-                * central_norm(shape, model)
-                * N
-                * cluster_avg_lighttomass
-                * m_avg_cluster
-                * np.diff(np.pi * rbins**2)
-                / 3.579e-12
-                * 3.78e-48
-                * (dist_mpc / 10) ** -2
-                * exposure_s
-            )
+            # photons_perbin_expected += (
+            #     background
+            #     * central_norm(shape, model)
+            #     * N
+            #     * cluster_avg_lighttomass
+            #     * m_avg_cluster
+            #     * np.diff(np.pi * rbins**2)
+            #     / 3.579e-12
+            #     * 3.78e-48
+            #     * (dist_mpc / 10) ** -2
+            #     * exposure_s
+            # )
 
             bin_counts = np.random.poisson(
                 photons_perbin_expected, size=photons_perbin_expected.shape
