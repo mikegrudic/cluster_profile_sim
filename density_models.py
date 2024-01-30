@@ -50,8 +50,12 @@ def king62_r50(c, scale_radius=1.0, tol=1e-13):
         return np.interp(0.5, king62_cdf(rgrid, c), rgrid) * scale_radius
 
 
-def EFF_cdf(x, gamma):
+def EFF_inv_cdf(x, gamma):
     return np.sqrt((1 - x) ** (-2 / (gamma - 2)) - 1)
+
+
+def EFF_cdf(x, gamma):
+    return 1 - (1 + x * x) ** (1 - 0.5 * gamma)
 
 
 def EFF_r50(gamma, scale_radius=1.0):
@@ -63,3 +67,10 @@ def model_r50(shape, scale_radius=1.0, model="EFF"):
         return EFF_r50(shape, scale_radius)
     elif model == "King62":
         return king62_r50(shape, scale_radius)
+
+
+def mass_aperture_fac(shape, scale_radius, aperture, model="EFF"):
+    if model == "EFF":
+        return EFF_cdf(np.inf, shape) / EFF_cdf(aperture / scale_radius, shape)
+    elif model == "King62":
+        return king62_cdf(np.inf, shape) / king62_cdf(aperture / scale_radius, shape)

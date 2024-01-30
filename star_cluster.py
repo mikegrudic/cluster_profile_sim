@@ -56,7 +56,7 @@ class StarCluster:
 
         if self.density_model == "EFF":
             self.cluster_radii = (
-                np.sort(EFF_cdf(np.random.rand(self.num_stars), self.shape))
+                np.sort(EFF_inv_cdf(np.random.rand(self.num_stars), self.shape))
                 * self.scale_radius
             )
         elif self.density_model == "King62":
