@@ -1,4 +1,5 @@
 """Defines StarCluster class"""
+
 from os.path import isfile
 import pickle
 import numpy as np
@@ -26,7 +27,7 @@ class StarCluster:
         scale_radius=1.0,
         model="EFF",
         shape=2.5,
-        rmax=100,
+        # rmax=100,
         background=0,
         seed=None,
         # sample_masses=False,
@@ -40,7 +41,7 @@ class StarCluster:
         self.norm = central_norm(shape, scale_radius, model)
         self.density_model = model
         self.shape = shape
-        self.rmax = rmax
+        # self.rmax = rmax
         self.seed = seed
         self.background = background
         self.cluster_radii = self.background_radii = self.num_background = None
@@ -75,7 +76,7 @@ class StarCluster:
         self.cluster_radii = self.cluster_radii  # [self.cluster_radii < self.rmax]
         return self.cluster_radii
 
-    def get_background_radii(self):
+    def get_background_radii(self, rmax=15):
         """Samples positions of background stars"""
         if self.background_radii is not None:
             return self.background_radii
@@ -83,10 +84,8 @@ class StarCluster:
         if isinstance(self.seed, int):
             np.random.seed(self.seed + 1)
         sigma_background = self.norm * self.background
-        num_background = round(
-            sigma_background * np.pi * self.rmax**2 * self.num_stars
-        )
-        self.background_radii = self.rmax * np.sqrt(np.random.rand(num_background))
+        num_background = round(sigma_background * np.pi * rmax**2 * self.num_stars)
+        self.background_radii = rmax * np.sqrt(np.random.rand(num_background))
         return self.background_radii
 
     def get_all_radii(self):
@@ -105,11 +104,15 @@ class StarCluster:
         filters=messa_m51_filters,
         track="geneva_2013_vvcrit_00",
         return_sum=False,
+        aperture=None,
     ):
         """Compute photometry values for individual stars"""
 
         # get stellar masses
         masses = self.initial_stellar_masses()
+        if aperture:
+            cut = self.cluster_radii < aperture
+            masses = masses[cut]
         if isinstance(ages, float):
             ages = np.repeat(ages, len(masses))
 
@@ -151,11 +154,14 @@ class StarCluster:
         cs=None,
         filters=messa_m51_filters,
         track="geneva_2013_vvcrit_00",
+        aperture=None,
     ):
         if cs is None:
             cs = cluster_slug(use_nebular=False, photsystem="Vega", filters=filters)
 
-        phot = self.get_photometry(ages, filters, track, return_sum=True)
+        phot = self.get_photometry(
+            ages, filters, track, return_sum=True, aperture=aperture
+        )
 
         logx, pdf = cs.mpdf({"age": 1, "mass": 0, "av": 2}[measurement.lower()], phot)
         logx_lower, logx_med, logx_upper = np.interp(
@@ -175,8 +181,8 @@ class StarCluster:
     ):
         N = self.num_stars
         N_eff = N // 100 if count_photons else N
-        if aperture is None:
-            aperture = self.rmax
+        # if aperture is None:
+        # aperture = self.rmax
         cluster_radii = self.get_cluster_radii()
         if np.any(np.isnan(cluster_radii)):
             return [np.nan, np.nan]
@@ -195,7 +201,7 @@ class StarCluster:
         rbins[0] = 0
         if count_photons:  # mock hubble photon counts
             # just treat ACS F555W as Johnson V
-            phot = self.get_photometry(age)[rcut, 3]
+            phot = self.get_photometry(age)[:, 3]
             lum_solar = 10 ** ((4.8 - phot) / 2.5)
             # light_to_mass = lum_solar /
             lum_cgs = 4e33 * lum_solar
@@ -294,7 +300,7 @@ class StarCluster:
         fac = 1e-2
         sol_best = p0
         fun_best = lossfunc_touse(p0, rbins, bin_counts, self.density_model)
-        for i in range(100):
+        for _ in range(100):
             guess = np.array(sol_best) + fac * np.random.normal(size=(4,))
 
             sol = minimize(
@@ -320,6 +326,9 @@ class StarCluster:
             return sol.x  # if full_output else sol.x[2:]
         return 4 * [np.nan]  # if full_output else 2 * [np.nan]
 
+    def get_concentration_index(self):
+        return 0
+
     def measure_r50(self, count_photons=False, age=3e8, method="poisson"):
         params = self.fit_density_profile(
             count_photons=count_photons, age=age, method=method
@@ -328,13 +337,13 @@ class StarCluster:
         shape = params[3]
         return model_r50(shape, scale_radius, self.density_model)
 
-    def binned_density_profile(self, num_bins=300, res=0.1):
+    def binned_density_profile(self, num_bins=300, res=0.1, aperture=15):
         """Returns the effective bin radii and values of the binned projected
         number density profile"""
         rbins = (
             np.logspace(
                 max(np.log10(res), -1),
-                np.log10(self.rmax),
+                np.log10(aperture),
                 min(self.num_stars // 3, num_bins),
             )
             * self.scale_radius
