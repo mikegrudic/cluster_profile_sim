@@ -1,4 +1,5 @@
 """Loss functions for density profile fitting"""
+
 import numpy as np
 from density_models import *
 from numba import vectorize
@@ -36,8 +37,12 @@ def logpoisson(counts, expected_counts):
 def lossfunc(x, rbins, bincounts, model="EFF"):
     if np.any(np.isnan(x)):
         return np.inf
-    logmu0, logbackground, loga, logshape = x
-    mu, bg, a, shape = 10**logmu0, 10**logbackground, 10**loga, 10**logshape
+    if len(x) == 4:
+        logmu0, logbackground, loga, logshape = x
+        mu, bg, a, shape = 10**logmu0, 10**logbackground, 10**loga, 10**logshape
+    else:
+        logmu0, logbackground, loga, logshape, logcutoff = x
+        mu, bg, a, shape, cutoff = 10**x
     #    cumcounts_avg = mu * model_cdf(rbins / a, shape, model) + np.pi * rbins**2 * bg
     if model == "EFF":
         gam = 10**logshape
@@ -49,6 +54,10 @@ def lossfunc(x, rbins, bincounts, model="EFF"):
             * (a ** (2 - gam) - (a**2 + rbins**2) ** (1 - gam / 2))
             / (gam - 2)
             + np.pi * rbins**2 * bg
+        )
+    elif model == "EFF_cutoff":
+        cumcounts_avg = (
+            mu * EFF_cutoff_cdf(rbins / a, shape, cutoff / a) + np.pi * rbins**2 * bg
         )
     elif model == "King62":
         c = 10**logshape

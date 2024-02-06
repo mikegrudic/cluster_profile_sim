@@ -27,9 +27,9 @@ class StarCluster:
         scale_radius=1.0,
         model="EFF",
         shape=2.5,
-        # rmax=100,
         background=0,
         seed=None,
+        cutoff=np.inf,
         # sample_masses=False,
         # filters=None,
     ):
@@ -37,36 +37,38 @@ class StarCluster:
         generate_radii to randomly sample the cluster radii"""
         self.num_stars = num_stars
         self.scale_radius = scale_radius
+        self.cutoff = cutoff  # the ACTUAL ground-truth cutoff, not the aperture radius!
         self.r50_target = model_r50(shape, scale_radius)
         self.norm = central_norm(shape, scale_radius, model)
         self.density_model = model
         self.shape = shape
-        # self.rmax = rmax
         self.seed = seed
         self.background = background
-        self.cluster_radii = self.background_radii = self.num_background = None
+        self.cluster_radii = self.background_radii = self.num_background = []
         self.masses = self.initial_mass = None
         self.photometry = {}
 
     def get_cluster_radii(self, enforce_r50=False):
         """Randomly samples projected stellar radii from the specified number density model"""
-        if self.cluster_radii is not None:
+        if self.cluster_radii != []:
             return self.cluster_radii
 
         np.random.seed(self.seed)
 
+        x_rand = np.random.rand(self.num_stars)
         if self.density_model == "EFF":
             self.cluster_radii = (
-                np.sort(EFF_inv_cdf(np.random.rand(self.num_stars), self.shape))
-                * self.scale_radius
+                np.sort(EFF_inv_cdf(x_rand, self.shape)) * self.scale_radius
             )
+        elif self.density_model == "EFF_cutoff":
+            x = np.linspace(0, self.cutoff, 100000)
+            cdf = EFF_cutoff_cdf(x, self.shape, self.cutoff)
+            self.cluster_radii = np.sort(np.interp(x_rand, cdf, x))
         elif self.density_model == "King62":
             c = self.shape
             x = np.linspace(0, c, 100000)
             cdf = king62_cdf(x, c)
-            self.cluster_radii = np.sort(
-                np.interp(np.random.rand(self.num_stars), cdf, x)
-            )
+            self.cluster_radii = np.sort(np.interp(x_rand, cdf, x))
 
         if enforce_r50:
             r50_target = model_r50(self.shape, self.scale_radius, self.density_model)
@@ -78,7 +80,7 @@ class StarCluster:
 
     def get_background_radii(self, rmax=15):
         """Samples positions of background stars"""
-        if self.background_radii is not None:
+        if self.background_radii != []:
             return self.background_radii
 
         if isinstance(self.seed, int):
@@ -88,9 +90,9 @@ class StarCluster:
         self.background_radii = rmax * np.sqrt(np.random.rand(num_background))
         return self.background_radii
 
-    def get_all_radii(self):
+    def get_all_radii(self, rmax=15):
         """Returns the radii of both the cluster and background stars"""
-        return self.get_cluster_radii(), self.get_background_radii()
+        return self.get_cluster_radii(), self.get_background_radii(rmax)
 
     def initial_stellar_masses(self):
         """Samples masses of stars in the cluster"""
@@ -172,17 +174,18 @@ class StarCluster:
     def fit_density_profile(
         self,
         count_photons=False,
-        aperture=None,
+        aperture=15,
         num_bins=100,
         method="poisson",
         res=1e-1,
         age=3e8,
         dist_mpc=1,
+        model=None,
     ):
+        if model is None:
+            model = self.density_model
         N = self.num_stars
         N_eff = N // 100 if count_photons else N
-        # if aperture is None:
-        # aperture = self.rmax
         cluster_radii = self.get_cluster_radii()
         if np.any(np.isnan(cluster_radii)):
             return [np.nan, np.nan]
@@ -190,7 +193,7 @@ class StarCluster:
         if count_photons:
             all_radii = np.copy(cluster_radii)
         else:
-            all_radii = np.concatenate(self.get_all_radii())
+            all_radii = np.concatenate(self.get_all_radii(rmax=aperture))
         rcut = all_radii < aperture
         all_radii = all_radii[rcut]
         # if count_photons:
@@ -201,7 +204,7 @@ class StarCluster:
         rbins[0] = 0
         if count_photons:  # mock hubble photon counts
             # just treat ACS F555W as Johnson V
-            phot = self.get_photometry(age)[:, 3]
+            phot = self.get_photometry(age)[:, 3][rcut]
             lum_solar = 10 ** ((4.8 - phot) / 2.5)
             # light_to_mass = lum_solar /
             lum_cgs = 4e33 * lum_solar
@@ -210,6 +213,7 @@ class StarCluster:
             # photons expected from each star: Q * t * effective area / (4 pi r^2)
             exposure_s = 1000
             photons_expected = 3.78e-48 * (dist_mpc / 10) ** -2 * Q * exposure_s
+
             if method == "djorgovski87":
                 radii_split = np.array_split(all_radii, 8)  # split into 8 sectors
                 photons_expected_split = np.array_split(photons_expected, 8)
@@ -277,18 +281,23 @@ class StarCluster:
         else:
             lossfunc_touse = lossfunc_djorgovski87
 
-        p0 = np.array(
-            [
-                max(-10, np.log10(mu0_est)),
-                max(-10, np.log10(self.background * mu0_est)),
-                np.log10(self.scale_radius),
-                np.log10(self.shape),
-            ]
-        )
+        p0 = [
+            max(-10, np.log10(mu0_est)),
+            max(-10, np.log10(self.background * mu0_est)),
+            np.log10(self.scale_radius),
+            np.log10(self.shape),
+        ]
+        if "cutoff" in model:
+            p0.append(np.log10(self.cutoff))
 
-        if self.density_model == "EFF":
-            shape_range = np.log10([2, 20])
-        elif self.density_model == "King62":
+        p0 = np.array(p0)
+        n_params = len(p0)
+
+        if "EFF" == model:
+            shape_range = np.log10([2, 1e6])
+        elif model == "EFF_cutoff":
+            shape_range = np.log10([0.1, 1e6])
+        elif model == "King62":
             shape_range = np.log10([1e-3, 10 * aperture])
         bounds = [
             (np.log10(N) - 6, np.log10(N) + 6),
@@ -296,17 +305,19 @@ class StarCluster:
             (-10, 1 + np.log10(aperture)),
             shape_range,
         ]
+        if "cutoff" in model:
+            bounds.append([np.log10(self.cutoff) - 2, np.log10(aperture)])
 
         fac = 1e-2
         sol_best = p0
-        fun_best = lossfunc_touse(p0, rbins, bin_counts, self.density_model)
+        fun_best = lossfunc_touse(p0, rbins, bin_counts, model)
         for _ in range(100):
-            guess = np.array(sol_best) + fac * np.random.normal(size=(4,))
+            guess = np.array(sol_best) + fac * np.random.normal(size=(n_params,))
 
             sol = minimize(
                 lossfunc_touse,
                 guess,
-                args=(rbins, bin_counts, self.density_model),
+                args=(rbins, bin_counts, model),
                 method="Nelder-Mead",
                 bounds=bounds,
                 options={
@@ -320,24 +331,40 @@ class StarCluster:
             if sol.success:
                 break
 
-        sol.x[-1] = 10 ** sol.x[-1]
+        # shape parameter
+        sol.x = 10**sol.x
 
         if sol.success:
             return sol.x  # if full_output else sol.x[2:]
-        return 4 * [np.nan]  # if full_output else 2 * [np.nan]
+        return n_params * [np.nan]  # if full_output else 2 * [np.nan]
 
-    def get_concentration_index(self):
+    def get_concentration_index(self, res=0.1):
         return 0
 
-    def measure_r50(self, count_photons=False, age=3e8, method="poisson"):
+    def measure_r50(
+        self, count_photons=False, age=3e8, method="poisson", model=None, aperture=15
+    ):
+        if model is None:
+            model = self.density_model
         params = self.fit_density_profile(
-            count_photons=count_photons, age=age, method=method
+            count_photons=count_photons,
+            age=age,
+            method=method,
+            model=model,
+            aperture=aperture,
         )
-        scale_radius = 10 ** params[2]
+        # print(params)
+        scale_radius = params[2]
         shape = params[3]
-        return model_r50(shape, scale_radius, self.density_model)
+        if "cutoff" in model:
+            cutoff = params[-1]
+        else:
+            cutoff = np.inf
+        return model_r50(shape, scale_radius, self.density_model, cutoff_radius=cutoff)
 
-    def binned_density_profile(self, num_bins=300, res=0.1, aperture=15):
+    def binned_density_profile(
+        self, num_bins=300, res=0.1, aperture=15, count_photons=False
+    ):
         """Returns the effective bin radii and values of the binned projected
         number density profile"""
         rbins = (
@@ -348,13 +375,17 @@ class StarCluster:
             )
             * self.scale_radius
         )
-        counts = np.histogram(np.concatenate(self.get_all_radii()), rbins)[0]
+        # if count_photons:
+
+        counts = np.histogram(np.concatenate(self.get_all_radii(rmax=aperture)), rbins)[
+            0
+        ]
         r_eff = np.sqrt(rbins[1:] * rbins[:-1])
         number_density = counts / np.diff(np.pi * rbins**2)
         return r_eff, number_density
 
-    def plot_density_profile(self, num_bins=300, res=0.1):
-        r, sigma = self.binned_density_profile(num_bins, res)
+    def plot_density_profile(self, num_bins=300, res=0.1, aperture=15):
+        r, sigma = self.binned_density_profile(num_bins, res, aperture=aperture)
         # params = self.fit_density_profile()
 
         plt.loglog(r, sigma)
