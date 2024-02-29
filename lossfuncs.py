@@ -3,6 +3,7 @@
 import numpy as np
 from density_models import *
 from numba import vectorize
+from scipy.stats import median_abs_deviation
 
 
 @vectorize(fastmath=True)
@@ -41,9 +42,9 @@ def lossfunc(x, rbins, bincounts, model="EFF"):
         logmu0, logbackground, loga, logshape = x
         mu, bg, a, shape = 10**logmu0, 10**logbackground, 10**loga, 10**logshape
     else:
-        logmu0, logbackground, loga, logshape, logcutoff = x
+        # logmu0, logbackground, loga, logshape, logcutoff = x
         mu, bg, a, shape, cutoff = 10**x
-    #    cumcounts_avg = mu * model_cdf(rbins / a, shape, model) + np.pi * rbins**2 * bg
+
     if model == "EFF":
         gam = 10**logshape
         cumcounts_avg = (
@@ -80,7 +81,7 @@ def lossfunc_djorgovski87(x, rbins, bincounts, model="EFF"):
     mu, bg, a, shape = 10**logmu0, 10**logbackground, 10**loga, 10**logshape
     # cumcounts_avg = mu * model_cdf(rbins / a, shape, model) + np.pi * rbins**2 * bg
     if model == "EFF":
-        gam = 10**logshape
+        gam = shape
         cumcounts_avg = (
             mu
             * 2
@@ -91,10 +92,17 @@ def lossfunc_djorgovski87(x, rbins, bincounts, model="EFF"):
             + np.pi * rbins**2 * bg
         )
     elif model == "King62":
-        c = 10**logshape
+        c = shape
         cumcounts_avg = mu * king62_cdf(rbins / a, c) + np.pi * rbins**2 * bg
+    area = np.diff(np.pi * rbins**2)
     expected_counts = np.diff(cumcounts_avg)
-    stderr = np.std(bincounts, axis=0)
+    # total_counts = np.median(bincounts, axis=0)  # * 8 / area
+    # stderr = median_abs_deviation(bincounts, axis=0) * 1.4826  # * np.sqrt(8)
     total_counts = np.sum(bincounts, axis=0)
-    prob = np.sum(-((expected_counts - total_counts) ** 2) / (2 * stderr**2))
+    stderr = np.std(bincounts, axis=0)
+    # print(np.c_[total_counts, total_counts2])
+    prob = -np.sum(
+        (((expected_counts / 8 - total_counts) ** 2) / (2 * stderr**2))[(stderr > 0)]
+    )
+    # print(prob)
     return -prob

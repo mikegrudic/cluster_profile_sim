@@ -15,6 +15,7 @@ from lossfuncs import *
 MMAX = 100
 IMF_SAMPLES = np.load("kroupa_samples.npy")
 IMF_SAMPLES = IMF_SAMPLES[IMF_SAMPLES < MMAX]
+MEAN_STELLAR_MASS = IMF_SAMPLES.mean()
 
 
 class StarCluster:
@@ -48,7 +49,7 @@ class StarCluster:
         self.masses = self.initial_mass = None
         self.photometry = {}
 
-    def get_cluster_radii(self, enforce_r50=False):
+    def get_cluster_radii(self, enforce_r50=True):
         """Randomly samples projected stellar radii from the specified number density model"""
         if self.cluster_radii != []:
             return self.cluster_radii
@@ -85,8 +86,10 @@ class StarCluster:
 
         if isinstance(self.seed, int):
             np.random.seed(self.seed + 1)
-        sigma_background = self.norm * self.background
-        num_background = round(sigma_background * np.pi * rmax**2 * self.num_stars)
+        mass_background_msun = np.pi * rmax**2 * self.background
+        num_background = round(mass_background_msun / MEAN_STELLAR_MASS)
+        # sigma_background = self.norm * self.background
+        # num_background = round(sigma_background * np.pi * rmax**2 * self.num_stars)
         self.background_radii = rmax * np.sqrt(np.random.rand(num_background))
         return self.background_radii
 
@@ -171,24 +174,49 @@ class StarCluster:
         )
         return logx_lower, logx_med, logx_upper
 
+        # logx, pdf = cs.mpdf((0, 1), phot)
+        # logm, logage = logx
+        # logm = logm[:, 0]
+        # logage = logage[0, :]
+        # m_pdf = pdf.sum(1)
+        # age_pdf = pdf.sum(0)
+
+        # logage_lower, logage_med, logage_upper = np.interp(
+        #     [0.16, 0.5, 0.84], age_pdf.cumsum() / age_pdf.sum(), logage
+        # )
+        # logm_lower, logm_med, logm_upper = np.interp(
+        #     [0.16, 0.5, 0.84], m_pdf.cumsum() / m_pdf.sum(), logm
+        # )
+        # # return logx_lower, logx_med, logx_upper
+        # if measurement.lower() == "mass":
+        #     return [logm_lower, logm_med, logm_upper]
+        # if measurement.lower() == "age":
+        #     return [logage_lower, logage_med, logage_upper]
+        # return {
+        #     "logm": [logm_lower, logm_med, logm_upper],
+        #     "logage": [logage_lower, logage_med, logage_upper],
+        # }
+
+    def dist_to_res_pc(self, dist_mpc):
+        return 0.193 * dist_mpc  # WFC3 UVIS pixels
+
     def fit_density_profile(
         self,
         count_photons=False,
         aperture=15,
-        num_bins=100,
         method="poisson",
         res=1e-1,
         age=3e8,
         dist_mpc=1,
         model=None,
+        max_num_bins=30,
     ):
         if model is None:
             model = self.density_model
         N = self.num_stars
-        N_eff = N // 100 if count_photons else N
         cluster_radii = self.get_cluster_radii()
         if np.any(np.isnan(cluster_radii)):
-            return [np.nan, np.nan]
+            return [np.nan,np.nan,np.nan, np.nan]
 
         if count_photons:
             all_radii = np.copy(cluster_radii)
@@ -196,11 +224,13 @@ class StarCluster:
             all_radii = np.concatenate(self.get_all_radii(rmax=aperture))
         rcut = all_radii < aperture
         all_radii = all_radii[rcut]
-        # if count_photons:
-        #     res = max(res, 0.5 * 1.94e-7 * dist_mpc * 1e6)
-        rbins = np.logspace(
-            max(np.log10(res), -1), np.log10(aperture), min(N_eff // 2, num_bins)
-        )
+        # if #count_photons:
+        res = max(
+            res, self.dist_to_res_pc(dist_mpc)
+        )  # max(res, 0.5 * 1.94e-7 * dist_mpc * 1e6)
+        rbins = np.linspace(
+            0, aperture, min(int(aperture / res) + 1, max_num_bins - 1)
+        )  # np.logspace(
         rbins[0] = 0
         if count_photons:  # mock hubble photon counts
             # just treat ACS F555W as Johnson V
@@ -214,33 +244,40 @@ class StarCluster:
             exposure_s = 1000
             photons_expected = 3.78e-48 * (dist_mpc / 10) ** -2 * Q * exposure_s
 
+            mass_to_light_old = 1.0  # msun lsun^-1
+            surface_brightness_old = (
+                self.background / mass_to_light_old * 3.83e33
+            )  # erg s^-1 pc^-2
+
             if method == "djorgovski87":
-                radii_split = np.array_split(all_radii, 8)  # split into 8 sectors
-                photons_expected_split = np.array_split(photons_expected, 8)
+                # p = np.random.permutation(len(all_radii))
+                sector = np.random.randint(0, 8, len(all_radii))
+                radii_split = [all_radii[sector == i] for i in range(8)]
+                photons_expected_split = [
+                    photons_expected[sector == i] for i in range(8)
+                ]
                 photons_perbin_expected = np.array(
                     [
                         np.histogram(r, rbins, weights=p)[0]
                         for r, p in zip(radii_split, photons_expected_split)
                     ]
                 )
+                # print(photons_perbin_expected)
 
                 photons_perbin_expected += (
-                    self.background
-                    * self.norm
-                    * lum_cgs.sum()
+                    surface_brightness_old
                     * np.diff(np.pi * rbins**2)
                     / 3.579e-12
                     * 3.78e-48
-                    * (dist_mpc / 10) ** -2
-                    * exposure_s
+                    * (dist_mpc / 10) ** -2  # distance
+                    * exposure_s  # exposure time
                 ) / 8
                 bin_counts = [
                     np.random.poisson(P, size=P.shape) for P in photons_perbin_expected
                 ]
 
                 mu0_est = max(
-                    photons_perbin_expected.sum(0)[rbins[1:] < 0.5].sum()
-                    / (np.pi * 0.5**2),
+                    photons_perbin_expected.sum(0)[0] / (np.pi * rbins[1] ** 2),
                     1,
                 )
             else:
@@ -249,28 +286,24 @@ class StarCluster:
                 )[0]
                 # add smooth background, emulating an older stellar pop
                 photons_perbin_expected += (
-                    self.background
-                    * self.norm
-                    * lum_cgs.sum()
+                    surface_brightness_old
                     * np.diff(np.pi * rbins**2)
                     / 3.579e-12
                     * 3.78e-48
-                    * (dist_mpc / 10) ** -2
-                    * exposure_s
+                    * (dist_mpc / 10) ** -2  # distance
+                    * exposure_s  # exposure time
                 )
-
                 bin_counts = np.random.poisson(
                     photons_perbin_expected, size=photons_perbin_expected.shape
                 )
-                # plt.loglog(rbins[1:], bin_counts / np.diff(rbins**2))
-                # plt.show()
                 mu0_est = max(
-                    photons_perbin_expected[rbins[1:] < 0.5].sum() / (np.pi * 0.5**2),
+                    photons_perbin_expected[0] / (np.pi * rbins[1] ** 2),
                     1,
                 )
         else:
             if method == "djorgovski87":
-                radii_split = np.array_split(all_radii, 8)
+                sector = np.random.randint(0, 8, len(all_radii))
+                radii_split = [all_radii[sector == i] for i in range(8)]
                 bin_counts = [np.histogram(r, rbins)[0] for r in radii_split]
             else:
                 bin_counts = np.histogram(all_radii, rbins)[0]
@@ -294,7 +327,7 @@ class StarCluster:
         n_params = len(p0)
 
         if "EFF" == model:
-            shape_range = np.log10([2, 1e6])
+            shape_range = np.log10([0.1, 1e6])
         elif model == "EFF_cutoff":
             shape_range = np.log10([0.1, 1e6])
         elif model == "King62":
@@ -309,7 +342,7 @@ class StarCluster:
             bounds.append([np.log10(self.cutoff) - 2, np.log10(aperture)])
 
         fac = 1e-2
-        sol_best = p0
+        sol_best = np.copy(p0)
         fun_best = lossfunc_touse(p0, rbins, bin_counts, model)
         for _ in range(100):
             guess = np.array(sol_best) + fac * np.random.normal(size=(n_params,))
@@ -321,7 +354,7 @@ class StarCluster:
                 method="Nelder-Mead",
                 bounds=bounds,
                 options={
-                    "xatol": 1e-6,
+                    "xatol": 1e-9,
                 },
             )
             fac *= 1.05
@@ -338,11 +371,29 @@ class StarCluster:
             return sol.x  # if full_output else sol.x[2:]
         return n_params * [np.nan]  # if full_output else 2 * [np.nan]
 
-    def get_concentration_index(self, res=0.1):
-        return 0
+    def concentration_index(self, age=1e8, dist_mpc=5, num_pixels=(1, 3)):
+        if dist_mpc < 1:
+            return 100.0
+        phot = self.get_photometry(age)[:, 3]
+        lum_solar = 10 ** ((4.8 - phot) / 2.5)
+        radii = self.get_cluster_radii()
+        res = self.dist_to_res_pc(dist_mpc)
+        pixels = radii / res
+        ratio = (
+            lum_solar[pixels < num_pixels[0]].sum()
+            / lum_solar[pixels < num_pixels[1]].sum()
+        )
+        return -np.log10(ratio) * 2.5
 
     def measure_r50(
-        self, count_photons=False, age=3e8, method="poisson", model=None, aperture=15
+        self,
+        count_photons=False,
+        age=3e8,
+        method="poisson",
+        model=None,
+        aperture=15,
+        dist_mpc=1,
+        max_num_bins=30,
     ):
         if model is None:
             model = self.density_model
@@ -352,6 +403,8 @@ class StarCluster:
             method=method,
             model=model,
             aperture=aperture,
+            dist_mpc=dist_mpc,
+            max_num_bins=max_num_bins,
         )
         # print(params)
         scale_radius = params[2]
@@ -360,7 +413,7 @@ class StarCluster:
             cutoff = params[-1]
         else:
             cutoff = np.inf
-        return model_r50(shape, scale_radius, self.density_model, cutoff_radius=cutoff)
+        return model_r50(shape, scale_radius, model, cutoff_radius=cutoff)
 
     def binned_density_profile(
         self, num_bins=300, res=0.1, aperture=15, count_photons=False
