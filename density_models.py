@@ -25,20 +25,34 @@ def eff_cutoff_central_norm(gamma, x_cut=np.inf):
     return (gamma - 2) / (2 * np.pi) / ((1 + x_cut**2) ** (1 - 0.5 * gamma) - 1)
 
 
+def gaussian_central_norm():
+    """Returns the central surface density of a 2D Gaussian with unit variance."""
+    return 0.159155
+
+
 def central_norm(shape, scale_radius=1.0, cutoff_radius=None, model="EFF"):
     """Returns the central value of a projected number density model
     *normalized to 1*"""
-    if model == "EFF":
-        return eff_central_norm(shape) / scale_radius**2
-    elif model == "EFF_cutoff":
-        return (
-            eff_cutoff_central_norm(shape, cutoff_radius / scale_radius)
-            / scale_radius**2
-        )
-    elif model == "King62":
-        return king62_central_norm(shape) / scale_radius**2
-    else:
-        raise NotImplementedError(f"Density model {model} has not been implemented.")
+    match model:
+        case "EFF":
+            #    if model == "EFF":
+            return eff_central_norm(shape) / scale_radius**2
+        #    elif model == "EFF_cutoff":
+        case "EFF_cutoff":
+            return (
+                eff_cutoff_central_norm(shape, cutoff_radius / scale_radius)
+                / scale_radius**2
+            )
+        #    elif model == "King62":
+        case "King62":
+            return king62_central_norm(shape) / scale_radius**2
+        #    else:
+        case "Gaussian":
+            return gaussian_central_norm() / scale_radius**2
+        case _:
+            raise NotImplementedError(
+                f"Density model {model} has not been implemented."
+            )
 
 
 @vectorize
@@ -104,15 +118,34 @@ def EFF_cutoff_cdf(x, gamma, x_cutoff=np.inf):
     return frac
 
 
+def gaussian_r50(sigma):
+    """Effective radius of a 2D Gaussian with variance sigma"""
+    return np.sqrt(np.log(4)) * sigma
+
+
+def gaussian_cdf(x):
+    """CDF of a 2D Gaussian with unit variance"""
+    return 1 - np.exp(-x * x / 2)
+
+
 def model_r50(shape, scale_radius=1.0, model="EFF", cutoff_radius=np.inf):
-    if model == "EFF":
-        return EFF_r50(shape, scale_radius)
-    elif model == "EFF_cutoff":
-        return EFF_cutoff_r50(shape, scale_radius, cutoff_radius)
-    elif model == "King62":
-        return king62_r50(shape, scale_radius)
-    else:
-        raise NotImplementedError(f"Density model {model} has not been implemented.")
+    match model:
+        case "EFF":
+            #    if model == "EFF":
+            return EFF_r50(shape, scale_radius)
+        #    elif model == "EFF_cutoff":
+        case "EFF_cutoff":
+            return EFF_cutoff_r50(shape, scale_radius, cutoff_radius)
+        #    elif model == "King62":
+        case "King62":
+            return king62_r50(shape, scale_radius)
+        #    else:
+        case "Gaussian":
+            return gaussian_r50(scale_radius)
+        case _:
+            raise NotImplementedError(
+                f"Density model {model} has not been implemented."
+            )
 
 
 def mass_aperture_fac(shape, scale_radius, aperture, model="EFF", cutoff_radius=np.inf):

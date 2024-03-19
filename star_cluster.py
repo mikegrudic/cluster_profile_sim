@@ -8,7 +8,8 @@ from matplotlib import pyplot as plt
 from density_models import *
 from get_isochrone import generate_isochrone_grid, get_photometry_of_stars
 from filterlists import messa_m51_filters
-from slugpy.cluster_slug import cluster_slug
+
+# from slugpy.cluster_slug import cluster_slug
 from lossfuncs import *
 
 
@@ -70,6 +71,9 @@ class StarCluster:
             x = np.linspace(0, c, 100000)
             cdf = king62_cdf(x, c)
             self.cluster_radii = np.sort(np.interp(x_rand, cdf, x))
+        elif self.density_model == "Gaussian":
+            x = np.random.normal(size=(self.num_stars, 2))
+            self.cluster_radii = np.sort((x * x).sum(1) ** 0.5)
 
         if enforce_r50:
             r50_target = model_r50(self.shape, self.scale_radius, self.density_model)
@@ -210,13 +214,14 @@ class StarCluster:
         dist_mpc=1,
         model=None,
         max_num_bins=30,
+        num_bins=None,
     ):
         if model is None:
             model = self.density_model
         N = self.num_stars
         cluster_radii = self.get_cluster_radii()
         if np.any(np.isnan(cluster_radii)):
-            return [np.nan,np.nan,np.nan, np.nan]
+            return [np.nan, np.nan, np.nan, np.nan]
 
         if count_photons:
             all_radii = np.copy(cluster_radii)
@@ -228,10 +233,14 @@ class StarCluster:
         res = max(
             res, self.dist_to_res_pc(dist_mpc)
         )  # max(res, 0.5 * 1.94e-7 * dist_mpc * 1e6)
-        rbins = np.linspace(
-            0, aperture, min(int(aperture / res) + 1, max_num_bins - 1)
-        )  # np.logspace(
+        if num_bins:
+            rbins = np.linspace(0, aperture, num_bins)
+        else:
+            rbins = np.linspace(
+                0, aperture, min(int(aperture / res) + 1, max_num_bins - 1)
+            )  # np.logspace(
         rbins[0] = 0
+        # print(rbins)
         if count_photons:  # mock hubble photon counts
             # just treat ACS F555W as Johnson V
             phot = self.get_photometry(age)[:, 3][rcut]
@@ -315,11 +324,12 @@ class StarCluster:
             lossfunc_touse = lossfunc_djorgovski87
 
         p0 = [
-            max(-10, np.log10(mu0_est)),
+            max(-10, np.log10(N)),
             max(-10, np.log10(self.background * mu0_est)),
             np.log10(self.scale_radius),
-            np.log10(self.shape),
         ]
+        if model != "Gaussian":
+            p0.append(np.log10(self.shape))
         if "cutoff" in model:
             p0.append(np.log10(self.cutoff))
 
@@ -333,11 +343,12 @@ class StarCluster:
         elif model == "King62":
             shape_range = np.log10([1e-3, 10 * aperture])
         bounds = [
-            (np.log10(N) - 6, np.log10(N) + 6),
+            (np.log10(N) - 10, np.log10(N) + 10),
             (-10, 10),
             (-10, 1 + np.log10(aperture)),
-            shape_range,
         ]
+        if model != "Gaussian":
+            bounds.append(shape_range)
         if "cutoff" in model:
             bounds.append([np.log10(self.cutoff) - 2, np.log10(aperture)])
 
@@ -363,7 +374,6 @@ class StarCluster:
                 fun_best = sol.fun
             if sol.success:
                 break
-
         # shape parameter
         sol.x = 10**sol.x
 
@@ -394,6 +404,8 @@ class StarCluster:
         aperture=15,
         dist_mpc=1,
         max_num_bins=30,
+        res=0.1,
+        num_bins=None,
     ):
         if model is None:
             model = self.density_model
@@ -405,10 +417,15 @@ class StarCluster:
             aperture=aperture,
             dist_mpc=dist_mpc,
             max_num_bins=max_num_bins,
+            res=res,
+            num_bins=num_bins,
         )
-        # print(params)
+        #        print(params)
         scale_radius = params[2]
-        shape = params[3]
+        if len(params) > 3:
+            shape = params[3]
+        else:
+            shape = np.nan
         if "cutoff" in model:
             cutoff = params[-1]
         else:

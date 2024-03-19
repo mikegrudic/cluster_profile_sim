@@ -36,13 +36,16 @@ def logpoisson(counts, expected_counts):
 
 
 def lossfunc(x, rbins, bincounts, model="EFF"):
+    """Loss func for Poisson count fitting"""
     if np.any(np.isnan(x)):
         return np.inf
     if len(x) == 4:
         logmu0, logbackground, loga, logshape = x
         mu, bg, a, shape = 10**logmu0, 10**logbackground, 10**loga, 10**logshape
+    elif len(x) == 3:
+        logmu0, logbackground, loga = x
+        mu, bg, a = 10**x
     else:
-        # logmu0, logbackground, loga, logshape, logcutoff = x
         mu, bg, a, shape, cutoff = 10**x
 
     if model == "EFF":
@@ -63,9 +66,13 @@ def lossfunc(x, rbins, bincounts, model="EFF"):
     elif model == "King62":
         c = 10**logshape
         cumcounts_avg = mu * king62_cdf(rbins / a, c) + np.pi * rbins**2 * bg
+    elif model == "Gaussian":
+        #        print(gaussian_cdf(rbins / a))
+        cumcounts_avg = mu * gaussian_cdf(rbins / a) + np.pi * rbins**2 * bg
     expected_counts = np.diff(cumcounts_avg)
 
     prob = logpoisson(bincounts, expected_counts).sum()
+    #    print(x, np.c_[expected_counts, bincounts], -prob)
     return -prob
 
 
